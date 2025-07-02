@@ -50,6 +50,7 @@ class AudioRecorder:
             'silence_duration': config.getfloat('audio', 'silence_duration_seconds', fallback=2.0),
             'sample_rate': config.getint('audio', 'sample_rate', fallback=44100),
             'channels': config.getint('audio', 'channels', fallback=1),
+            'compression_format': config.get('audio', 'compression_format', fallback='wav').lower(),
             'log_level': config.get('logging', 'level', fallback='INFO')
         }
     
@@ -105,14 +106,16 @@ class AudioRecorder:
             raise RuntimeError(f"Cannot write to storage directory: {storage_path}")
     
     def _generate_filename(self) -> str:
-        """Generate unique filename with UTC timestamp."""
+        """Generate unique filename with UTC timestamp and sample rate."""
         now = datetime.datetime.utcnow()
-        base_name = f"audio_{now.strftime('%Y%m%d_%H%M%S')}.wav"
+        sample_rate_khz = self.config['sample_rate'] // 1000
+        file_ext = self.config['compression_format']
+        base_name = f"audio_{now.strftime('%Y%m%d_%H%M%S')}_{sample_rate_khz}kHz.{file_ext}"
         full_path = Path(self.config['storage_path']) / base_name
         
         counter = 1
         while full_path.exists():
-            name_with_version = f"audio_{now.strftime('%Y%m%d_%H%M%S')}_v{counter}.wav"
+            name_with_version = f"audio_{now.strftime('%Y%m%d_%H%M%S')}_{sample_rate_khz}kHz_v{counter}.{file_ext}"
             full_path = Path(self.config['storage_path']) / name_with_version
             counter += 1
         
@@ -124,7 +127,8 @@ class AudioRecorder:
             return None
             
         try:
-            overlap_path = Path(self.config['storage_path']) / '.overlap_buffer.wav'
+            file_ext = self.config['compression_format']
+            overlap_path = Path(self.config['storage_path']) / f'.overlap_buffer.{file_ext}'
             overlap_minutes = self.config['overlap_duration']
             
             cmd = [
@@ -166,6 +170,9 @@ class AudioRecorder:
                 'silence', '1', '0.1', self.config['silence_threshold'],
                 '1', f"{self.config['silence_duration']}", self.config['silence_threshold']
             ]
+            
+            if self.config['compression_format'] != 'wav':
+                sox_silence_cmd.extend(['-C', '0'])
             
             self.logger.info(f"Starting recording: {output_file}")
             
@@ -220,7 +227,8 @@ class AudioRecorder:
     def _merge_with_overlap(self, overlap_file: str, new_file: str) -> str:
         """Merge overlap buffer with new recording."""
         try:
-            merged_file = new_file.replace('.wav', '_merged.wav')
+            file_ext = self.config['compression_format']
+            merged_file = new_file.replace(f'.{file_ext}', f'_merged.{file_ext}')
             
             cmd = ['sox', overlap_file, new_file, merged_file]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)

@@ -8,6 +8,11 @@ device = default
 sample_rate = 44100
 channels = 1
 
+# Compression settings
+# Supported formats: wav (uncompressed), flac, alac, ape
+# Note: compressed formats require appropriate SoX support
+compression_format = wav
+
 # Silence detection parameters  
 silence_threshold = 1%%
 silence_duration_seconds = 2.0
