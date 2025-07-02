@@ -1,0 +1,28 @@
+# Raspberry Pi Audio Recorder Configuration
+
+[audio]
+# ALSA device name (use 'arecord -l' to list available devices)
+device = default
+
+# Audio format settings
+sample_rate = 44100
+channels = 1
+
+# Silence detection parameters  
+silence_threshold = 1%%
+silence_duration_seconds = 2.0
+
+[recording]
+# Maximum intended duration per segment (minutes)
+max_duration_minutes = 60
+
+# Overlap duration between segments (minutes)
+overlap_minutes = 5
+
+[storage]
+# Directory to store recordings
+directory = /mnt/shared/raspi-audio
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = INFO
