@@ -13,6 +13,9 @@ Group=audio
 WorkingDirectory=/opt/raspi-audio-recorder
 ExecStart=/usr/bin/python3 /opt/raspi-audio-recorder/raspi_audio_recorder.py --config /opt/raspi-audio-recorder/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
 
 # Restart configuration
 Restart=always
