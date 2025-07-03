@@ -2,32 +2,35 @@
 
 [audio]
 # ALSA device name (use 'arecord -l' to list available devices)
-device = default
+device = plughw:3,0
 
 # Audio format settings
-sample_rate = 44100
+sample_rate = 22050
 channels = 1
 
 # Compression settings
 # Supported formats: wav (uncompressed), flac, alac, ape
 # Note: compressed formats require appropriate SoX support
-compression_format = wav
+compression_format = flac
 
-# Silence detection parameters  
-silence_threshold = 1%%
-silence_duration_seconds = 2.0
+# Silence detection parameters
+silence_threshold = 3%%
+silence_duration_seconds = 5.0
 
 [recording]
 # Maximum intended duration per segment (minutes)
-max_duration_minutes = 60
+max_duration_minutes = 30
 
 # Overlap duration between segments (minutes)
-overlap_minutes = 5
+overlap_minutes = 2
 
 [storage]
 # Directory to store recordings
 directory = /mnt/shared/raspi-audio
+# Customize the filename prefix for each recording instance
+# Examples: "kitchen", "office", "meeting_room", "raspi01"
+filename_prefix = office
 
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-level = INFO
+level = ERROR

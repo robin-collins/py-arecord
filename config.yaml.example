@@ -1,0 +1,23 @@
+# Example configuration for Raspberry Pi Audio Recorder
+# Copy this to config.yaml and modify as needed
+
+[audio]
+device = default
+sample_rate = 44100
+channels = 1
+compression_format = flac
+silence_threshold = 1%
+silence_duration_seconds = 2.0
+
+[recording]
+max_duration_minutes = 60
+overlap_minutes = 5
+
+[storage]
+directory = /mnt/shared/raspi-audio
+# Customize the filename prefix for each recording instance
+# Examples: "kitchen", "office", "meeting_room", "raspi01"
+filename_prefix = audio
+
+[logging]
+level = INFO
