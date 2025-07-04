@@ -26,6 +26,8 @@ class AudioRecorder:
         self.shutdown_requested = False
         self.current_process: Optional[subprocess.Popen] = None
         self.overlap_buffer_path: Optional[str] = None
+        self.temp_dir: Optional[Path] = None
+        self.current_temp_files: set = set()
 
         self._setup_logging()
         self._validate_dependencies()
@@ -111,37 +113,51 @@ class AudioRecorder:
     def _validate_storage_path(self):
         """Validate storage directory exists and is writable."""
         storage_path = Path(self.config["storage_path"])
+        self.temp_dir = storage_path / ".tmp"
 
         try:
             storage_path.mkdir(parents=True, exist_ok=True)
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
 
             test_file = storage_path / ".write_test"
             test_file.touch()
             test_file.unlink()
 
+            temp_test_file = self.temp_dir / ".write_test"
+            temp_test_file.touch()
+            temp_test_file.unlink()
+
             self.logger.info(f"Storage path validated: {storage_path}")
+            self.logger.info(f"Temp directory validated: {self.temp_dir}")
         except (OSError, PermissionError) as e:
             self.logger.error(f"Storage path validation failed: {e}")
             raise RuntimeError(f"Cannot write to storage directory: {storage_path}")
 
-    def _generate_filename(self) -> str:
-        """Generate unique filename with UTC timestamp and sample rate."""
-        now = datetime.datetime.utcnow()
+    def _generate_filename(self) -> tuple[str, str]:
+        """Generate unique filename with UTC timestamp and sample rate.
+        
+        Returns:
+            tuple: (temp_path, final_path) - paths for temporary and final storage
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
         sample_rate_khz = self.config["sample_rate"] // 1000
         file_ext = self.config["compression_format"]
         prefix = self.config["filename_prefix"]
         base_name = (
             f"{prefix}_{now.strftime('%Y%m%d_%H%M%S')}_{sample_rate_khz}kHz.{file_ext}"
         )
-        full_path = Path(self.config["storage_path"]) / base_name
+        
+        final_path = Path(self.config["storage_path"]) / base_name
+        temp_path = self.temp_dir / base_name
 
         counter = 1
-        while full_path.exists():
+        while final_path.exists() or temp_path.exists():
             name_with_version = f"{prefix}_{now.strftime('%Y%m%d_%H%M%S')}_{sample_rate_khz}kHz_v{counter}.{file_ext}"
-            full_path = Path(self.config["storage_path"]) / name_with_version
+            final_path = Path(self.config["storage_path"]) / name_with_version
+            temp_path = self.temp_dir / name_with_version
             counter += 1
 
-        return str(full_path)
+        return str(temp_path), str(final_path)
 
     def _create_overlap_buffer(self, source_file: str) -> Optional[str]:
         """Create overlap buffer from the end of the previous recording."""
@@ -150,9 +166,7 @@ class AudioRecorder:
 
         try:
             file_ext = self.config["compression_format"]
-            overlap_path = (
-                Path(self.config["storage_path"]) / f".overlap_buffer.{file_ext}"
-            )
+            overlap_path = self.temp_dir / f".overlap_buffer.{file_ext}"
             overlap_minutes = self.config["overlap_duration"]
 
             cmd = [
@@ -166,6 +180,7 @@ class AudioRecorder:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 self.logger.info(f"Created overlap buffer: {overlap_minutes} minutes")
+                self.current_temp_files.add(str(overlap_path))
                 return str(overlap_path)
             else:
                 self.logger.warning(f"Failed to create overlap buffer: {result.stderr}")
@@ -177,7 +192,7 @@ class AudioRecorder:
             self.logger.warning(f"Error creating overlap buffer: {e}")
             return None
 
-    def _record_segment(self, output_file: str) -> bool:
+    def _record_segment(self, temp_file: str) -> bool:
         """Record a single audio segment with silence detection."""
         try:
             max_duration_seconds = self.config["max_duration"] * 60
@@ -201,7 +216,7 @@ class AudioRecorder:
                 "-t",
                 "wav",
                 "-",
-                output_file,
+                temp_file,
                 "silence",
                 "1",
                 "0.1",
@@ -214,7 +229,7 @@ class AudioRecorder:
             if self.config["compression_format"] != "wav":
                 sox_silence_cmd.extend(["-C", "0"])
 
-            self.logger.info(f"Starting recording: {output_file}")
+            self.logger.info(f"Starting recording: {temp_file}")
 
             arecord_proc = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE)
             sox_proc = subprocess.Popen(
@@ -249,18 +264,19 @@ class AudioRecorder:
             self.recording_active = False
             self.current_process = None
 
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
+            if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1000:
                 duration = time.time() - start_time
                 self.logger.info(
-                    f"Recording completed: {output_file} ({duration:.1f}s)"
+                    f"Recording completed: {temp_file} ({duration:.1f}s)"
                 )
+                self.current_temp_files.add(temp_file)
                 return True
             else:
                 self.logger.warning(
-                    f"Recording file is empty or too small: {output_file}"
+                    f"Recording file is empty or too small: {temp_file}"
                 )
-                if os.path.exists(output_file):
-                    os.remove(output_file)
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
                 return False
 
         except Exception as e:
@@ -289,8 +305,31 @@ class AudioRecorder:
         except Exception as e:
             self.logger.warning(f"Error merging overlap: {e}")
             return new_file
+    
+    def _move_to_final(self, temp_file: str, final_file: str) -> bool:
+        """Move completed recording from temp to final directory."""
+        try:
+            import shutil
+            shutil.move(temp_file, final_file)
+            self.current_temp_files.discard(temp_file)
+            self.logger.info(f"Moved recording to final location: {final_file}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to move recording to final location: {e}")
+            return False
+    
+    def _cleanup_temp_files(self):
+        """Clean up temporary files on shutdown."""
+        for temp_file in list(self.current_temp_files):
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    self.logger.info(f"Cleaned up temp file: {temp_file}")
+            except Exception as e:
+                self.logger.warning(f"Failed to clean up temp file {temp_file}: {e}")
+        self.current_temp_files.clear()
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum, _frame):
         """Handle shutdown signals gracefully."""
         self.logger.info(f"Received signal {signum}, initiating graceful shutdown")
         self.shutdown_requested = True
@@ -302,6 +341,8 @@ class AudioRecorder:
                 self.current_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.current_process.kill()
+        
+        self._cleanup_temp_files()
 
     def run(self):
         """Main recording loop."""
@@ -317,22 +358,29 @@ class AudioRecorder:
 
         while not self.shutdown_requested:
             try:
-                output_file = self._generate_filename()
+                temp_file, final_file = self._generate_filename()
 
-                if self._record_segment(output_file):
+                if self._record_segment(temp_file):
                     if last_recording_file and self.overlap_buffer_path:
-                        output_file = self._merge_with_overlap(
-                            self.overlap_buffer_path, output_file
+                        temp_file = self._merge_with_overlap(
+                            self.overlap_buffer_path, temp_file
                         )
 
                     if self.overlap_buffer_path:
                         try:
                             os.remove(self.overlap_buffer_path)
+                            self.current_temp_files.discard(self.overlap_buffer_path)
                         except OSError:
                             pass
 
-                    self.overlap_buffer_path = self._create_overlap_buffer(output_file)
-                    last_recording_file = output_file
+                    if self._move_to_final(temp_file, final_file):
+                        self.overlap_buffer_path = self._create_overlap_buffer(final_file)
+                        last_recording_file = final_file
+                    else:
+                        self.logger.warning("Failed to move recording to final location")
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                            self.current_temp_files.discard(temp_file)
                 else:
                     self.logger.warning("Recording failed, retrying in 10 seconds")
                     time.sleep(10)
@@ -346,9 +394,11 @@ class AudioRecorder:
         if self.overlap_buffer_path and os.path.exists(self.overlap_buffer_path):
             try:
                 os.remove(self.overlap_buffer_path)
+                self.current_temp_files.discard(self.overlap_buffer_path)
             except OSError:
                 pass
-
+        
+        self._cleanup_temp_files()
         self.logger.info("Audio recording service stopped")
 
 
@@ -357,8 +407,8 @@ def main():
     parser.add_argument(
         "--config",
         "-c",
-        default="config.yaml",
-        help="Path to configuration file (default: config.yaml)",
+        default="config.ini",
+        help="Path to configuration file (default: config.ini)",
     )
     parser.add_argument(
         "--validate",

@@ -42,7 +42,7 @@ arecord --list-devices
 2. **Copy application files:**
    ```bash
    cp raspi_audio_recorder.py /opt/raspi-audio-recorder/
-   cp config.yaml /opt/raspi-audio-recorder/
+   cp config.ini /opt/raspi-audio-recorder/
    chmod +x /opt/raspi-audio-recorder/raspi_audio_recorder.py
    ```
 
@@ -62,7 +62,7 @@ arecord --list-devices
 
 ## Configuration
 
-Edit `/opt/raspi-audio-recorder/config.yaml` to customize settings:
+Edit `/opt/raspi-audio-recorder/config.ini` to customize settings:
 
 ```yaml
 [audio]
@@ -106,7 +106,7 @@ cd /opt/raspi-audio-recorder
 python3 raspi_audio_recorder.py --validate
 
 # Run interactively
-python3 raspi_audio_recorder.py --config config.yaml
+python3 raspi_audio_recorder.py --config config.ini
 ```
 
 ### Service Management
@@ -148,7 +148,7 @@ Recordings are saved as WAV files with UTC timestamps:
    ```bash
    # List devices
    arecord -l
-   
+
    # Test specific device
    arecord -D hw:1,0 -f S16_LE -c 1 -r 44100 -t wav test.wav
    ```
@@ -164,7 +164,7 @@ Recordings are saved as WAV files with UTC timestamps:
    ```bash
    # Check service logs
    sudo journalctl -u raspi-audio-recorder -n 50
-   
+
    # Test manually
    cd /opt/raspi-audio-recorder
    python3 raspi_audio_recorder.py --validate

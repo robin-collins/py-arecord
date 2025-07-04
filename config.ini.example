@@ -1,5 +1,5 @@
 # Example configuration for Raspberry Pi Audio Recorder
-# Copy this to config.yaml and modify as needed
+# Copy this to config.ini and modify as needed
 
 [audio]
 device = default
