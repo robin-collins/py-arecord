@@ -1,6 +1,7 @@
 [Unit]
 Description=Raspberry Pi Audio Recorder Service
-Documentation=file:README.md
+# Documentation field must be a valid URL (man: or https:), not a file path.
+# Documentation=man:raspi_audio_recorder(1)
 After=network.target sound.target
 Wants=network.target
 StartLimitIntervalSec=60
