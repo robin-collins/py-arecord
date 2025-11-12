@@ -6,6 +6,8 @@ A Python-based continuous audio recording service for Raspberry Pi with silence-
 
 - Continuous audio recording from ALSA devices
 - Automatic silence-based segmentation
+- Configurable minimum recording duration (discards recordings shorter than threshold)
+- Filters out brief noises and false triggers automatically
 - Overlap handling between segments to prevent conversation loss
 - UTC timestamp file naming with collision handling
 - Systemd daemon integration with auto-restart
@@ -74,6 +76,7 @@ silence_duration_seconds = 2.0     # Silence duration to trigger split
 
 [recording]
 max_duration_minutes = 60          # Maximum segment duration
+min_duration_seconds = 45          # Minimum recording duration (shorter recordings discarded)
 overlap_minutes = 5                # Overlap between segments
 
 [storage]

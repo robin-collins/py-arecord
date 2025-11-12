@@ -62,6 +62,9 @@ class AudioRecorder:
             "silence_duration": config.getfloat(
                 "audio", "silence_duration_seconds", fallback=2.0
             ),
+            "min_duration": config.getint(
+                "recording", "min_duration_seconds", fallback=45
+            ),
             "sample_rate": config.getint("audio", "sample_rate", fallback=44100),
             "channels": config.getint("audio", "channels", fallback=1),
             "compression_format": config.get(
@@ -241,11 +244,20 @@ class AudioRecorder:
             self.recording_active = True
 
             start_time = time.time()
+            min_duration = self.config["min_duration"]
+            
             while self.recording_active and not self.shutdown_requested:
+                elapsed_time = time.time() - start_time
+                
+                # Check if SoX stopped due to silence detection
                 if arecord_proc.poll() is not None or sox_proc.poll() is not None:
+                    self.logger.info(
+                        f"Silence detected, recording stopped at {elapsed_time:.1f}s"
+                    )
                     break
-
-                if time.time() - start_time > max_duration_seconds:
+                
+                # Emergency stop at maximum duration
+                if elapsed_time >= max_duration_seconds:
                     self.logger.info("Maximum duration reached, stopping recording")
                     break
 
@@ -266,6 +278,17 @@ class AudioRecorder:
 
             if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1000:
                 duration = time.time() - start_time
+                min_duration = self.config["min_duration"]
+                
+                # Check if recording met minimum duration requirement
+                if duration < min_duration:
+                    self.logger.info(
+                        f"Recording too short ({duration:.1f}s < {min_duration}s minimum), "
+                        f"continuing to next segment"
+                    )
+                    os.remove(temp_file)
+                    return False
+                
                 self.logger.info(
                     f"Recording completed: {temp_file} ({duration:.1f}s)"
                 )
@@ -382,8 +405,10 @@ class AudioRecorder:
                             os.remove(temp_file)
                             self.current_temp_files.discard(temp_file)
                 else:
-                    self.logger.warning("Recording failed, retrying in 10 seconds")
-                    time.sleep(10)
+                    # Recording didn't meet minimum duration or failed
+                    # Continue immediately to next recording attempt
+                    # (SoX will wait for sound via leading silence detection)
+                    time.sleep(1)
 
             except KeyboardInterrupt:
                 break

@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 - Sample rate included in filename format (e.g., `audio_20241201_143025_44kHz.flac`)
 - Compression format configuration in `config.ini`
 - Temporary folder recording with atomic file moves for data integrity
+- Minimum recording duration enforcement via `min_duration_seconds` configuration parameter (default: 45 seconds)
+- Recordings that end before minimum duration (due to early silence) are discarded and recording continues
+- System waits for sound, records until silence is detected, and only saves if duration >= minimum threshold
+- Ensures all saved recordings have meaningful content and filters out brief noise/false triggers
 
 ### Changed
 - Filename format now includes sample rate: `audio_YYYYMMDD_HHMMSS_NNkHz.{ext}`
