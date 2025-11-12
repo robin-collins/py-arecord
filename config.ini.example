@@ -3,11 +3,17 @@
 
 [audio]
 device = default
-sample_rate = 44100
+sample_rate = 16000  # VAD requires 8000, 16000, 32000, or 48000 Hz
 channels = 1
 compression_format = flac
-silence_threshold = 1%
-silence_duration_seconds = 2.0
+
+# Voice Activity Detection (Speech detection)
+use_vad = true  # Enable WebRTC VAD for speech vs noise detection
+vad_aggressiveness = 2  # 0-3: 0=lenient, 2=balanced, 3=very-aggressive
+vad_frame_duration_ms = 30  # Frame size: 10, 20, or 30 ms
+noise_floor_threshold = 1.0%  # RMS pre-filter before VAD
+silence_threshold = 1%  # Fallback threshold if VAD disabled
+silence_duration_seconds = 2.0  # Continuous non-speech before stopping
 
 [recording]
 max_duration_minutes = 60

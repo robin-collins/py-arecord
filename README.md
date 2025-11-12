@@ -5,10 +5,12 @@ A Python-based continuous audio recording service for Raspberry Pi with silence-
 ## Features
 
 - Continuous audio recording from ALSA devices
+- **WebRTC VAD (Voice Activity Detection)** for intelligent speech vs. noise detection
+- Two-stage detection: RMS pre-filter + WebRTC VAD for efficient processing
 - Python-based real-time audio level monitoring and silence detection
 - Configurable minimum recording duration (silence detection disabled until reached)
 - Automatic silence-based segmentation after minimum duration
-- Filters out brief noises and false triggers automatically
+- Filters out door slams, machinery noise, and other non-speech sounds automatically
 - Overlap handling between segments to prevent conversation loss
 - UTC timestamp file naming with collision handling
 - Systemd daemon integration with auto-restart
@@ -22,16 +24,22 @@ A Python-based continuous audio recording service for Raspberry Pi with silence-
 - SoX audio processing toolkit
 - ALSA audio system
 - systemd (for service management)
+- webrtcvad Python package (optional, for speech detection)
 
 ### Installation Commands
 ```bash
 # Ubuntu/Debian/Raspberry Pi OS
 sudo apt update
-sudo apt install python3 sox alsa-utils
+sudo apt install python3 python3-pip sox alsa-utils
+
+# Install Python dependencies
+pip3 install -r requirements.txt
+# Or manually: pip3 install webrtcvad
 
 # Verify installations
 sox --version
 arecord --list-devices
+python3 -c "import webrtcvad; print('WebRTC VAD installed')"
 ```
 
 ## Installation
@@ -70,10 +78,16 @@ Edit `/opt/raspi-audio-recorder/config.ini` to customize settings:
 ```yaml
 [audio]
 device = default                    # ALSA device name
-sample_rate = 44100                # Audio sample rate
+sample_rate = 16000                # Audio sample rate (VAD requires 8000/16000/32000/48000)
 channels = 1                       # Mono (1) or stereo (2)
-silence_threshold = 1%             # Silence detection sensitivity
-silence_duration_seconds = 2.0     # Silence duration to trigger split
+
+# Voice Activity Detection (Speech detection)
+use_vad = true                     # Enable WebRTC VAD (recommended)
+vad_aggressiveness = 2             # 0-3: 0=lenient, 2=balanced, 3=very-aggressive
+vad_frame_duration_ms = 30         # Frame size: 10, 20, or 30 ms
+noise_floor_threshold = 1.0%       # RMS pre-filter before VAD
+silence_threshold = 1%             # Fallback threshold if VAD disabled
+silence_duration_seconds = 2.0     # Continuous non-speech before stopping
 
 [recording]
 max_duration_minutes = 60          # Maximum segment duration
@@ -96,10 +110,38 @@ arecord -l
 
 Test audio recording:
 ```bash
-arecord -D default -f S16_LE -c 1 -r 44100 -t wav test.wav
+arecord -D default -f S16_LE -c 1 -r 16000 -t wav test.wav
 # Press Ctrl+C to stop, then play with:
 aplay test.wav
 ```
+
+### Voice Activity Detection (VAD) Configuration
+
+The service uses WebRTC VAD to distinguish speech from non-speech sounds:
+
+**Aggressiveness Levels** (`vad_aggressiveness`):
+- `0`: **Quality mode** - Lenient, captures all speech-like sounds (more false positives)
+- `1`: **Low bitrate mode** - Balanced for low-quality connections
+- `2`: **Aggressive mode** (recommended) - Good balance, filters most non-speech
+- `3`: **Very aggressive mode** - Strict, may miss quiet speech but excellent noise filtering
+
+**Frame Duration** (`vad_frame_duration_ms`):
+- `10ms`: Most responsive, highest CPU usage
+- `20ms`: Balanced
+- `30ms`: (recommended) Slightly less responsive, lower CPU usage
+
+**Noise Floor Threshold** (`noise_floor_threshold`):
+- RMS level below which audio is considered absolute silence
+- VAD is skipped for chunks below this level (efficiency optimization)
+- Typical range: 0.5% - 2.0%
+
+**Sample Rate Requirements**:
+- VAD only works with: 8000, 16000, 32000, or 48000 Hz
+- Recommended: **16000 Hz** (optimal for speech, lower file sizes)
+- If VAD unavailable or disabled, falls back to RMS-only detection
+
+**Disabling VAD**:
+Set `use_vad = false` to use simple RMS-based detection (faster, less accurate)
 
 ## Usage
 

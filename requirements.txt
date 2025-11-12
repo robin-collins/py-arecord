@@ -1,0 +1,11 @@
+# Python dependencies for Raspberry Pi Audio Recorder
+
+# WebRTC Voice Activity Detection (optional but recommended)
+# Enables intelligent speech vs. noise detection
+webrtcvad>=2.0.10
+
+# Note: System dependencies (not installed via pip):
+# - Python 3.7+
+# - SoX (sudo apt install sox)
+# - ALSA (sudo apt install alsa-utils)
+

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **ARCHITECTURE.md**: Comprehensive technical documentation describing audio capture pipeline, silence detection system, file management, and production deployment configuration
+
 ### Fixed
 - Service file now uses storage directory from `config.ini` instead of hardcoded `/mnt/shared/raspi-audio`
 - Install script now uses `config.ini` values by default without prompting (only prompts to change if explicitly requested)
@@ -14,12 +17,16 @@ All notable changes to this project will be documented in this file.
 - Sample rate included in filename format (e.g., `audio_20241201_143025_44kHz.flac`)
 - Compression format configuration in `config.ini`
 - Temporary folder recording with atomic file moves for data integrity
+- **WebRTC VAD integration** for intelligent speech vs. noise detection
+- Two-stage detection: RMS pre-filter + WebRTC VAD for efficient CPU usage
+- Configurable VAD aggressiveness (0-3) and frame duration (10/20/30ms)
+- Fallback to RMS-only detection if VAD unavailable or disabled
 - Python-based real-time audio level monitoring for precise silence detection
 - Minimum recording duration enforcement via `min_duration_seconds` configuration parameter (default: 45 seconds)
 - Silence detection is disabled until minimum duration is reached, then activates automatically
-- System waits for sound, records for at least min_duration, then stops on silence detection
+- System waits for speech, records for at least min_duration, then stops on silence/non-speech detection
 - If speech continues beyond minimum duration, recording continues until silence is detected
-- Ensures all saved recordings have meaningful content and filters out brief noise/false triggers
+- Filters out door slams, machinery noise, and other non-speech sounds automatically
 
 ### Changed
 - **Silence detection architecture**: Moved from SoX-based to Python-based real-time audio level monitoring

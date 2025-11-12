@@ -15,10 +15,15 @@ import signal
 import struct
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+try:
+    import webrtcvad  # type: ignore
+    WEBRTCVAD_AVAILABLE = True
+except ImportError:
+    WEBRTCVAD_AVAILABLE = False
 
 
 class AudioRecorder:
@@ -32,6 +37,7 @@ class AudioRecorder:
         self.current_temp_files: set = set()
 
         self._setup_logging()
+        self._setup_vad()
         self._validate_dependencies()
         self._validate_storage_path()
 
@@ -67,11 +73,21 @@ class AudioRecorder:
             "min_duration": config.getint(
                 "recording", "min_duration_seconds", fallback=45
             ),
-            "sample_rate": config.getint("audio", "sample_rate", fallback=44100),
+            "sample_rate": config.getint("audio", "sample_rate", fallback=16000),
             "channels": config.getint("audio", "channels", fallback=1),
             "compression_format": config.get(
                 "audio", "compression_format", fallback="wav"
             ).lower(),
+            "use_vad": config.getboolean("audio", "use_vad", fallback=True),
+            "vad_aggressiveness": config.getint(
+                "audio", "vad_aggressiveness", fallback=2
+            ),
+            "vad_frame_duration_ms": config.getint(
+                "audio", "vad_frame_duration_ms", fallback=30
+            ),
+            "noise_floor_threshold": config.get(
+                "audio", "noise_floor_threshold", fallback="1.0%"
+            ),
             "log_level": config.get("logging", "level", fallback="INFO"),
         }
 
@@ -87,6 +103,63 @@ class AudioRecorder:
 
         self.logger = logging.getLogger("raspi_audio_recorder")
         self.logger.info("Audio recorder service initialized")
+
+    def _setup_vad(self):
+        """Initialize WebRTC VAD if enabled and available."""
+        self.vad = None
+        self.use_vad = self.config["use_vad"]
+        
+        if self.use_vad:
+            if not WEBRTCVAD_AVAILABLE:
+                self.logger.warning(
+                    "WebRTC VAD requested but not available. "
+                    "Install with: pip install webrtcvad. "
+                    "Falling back to RMS-only detection."
+                )
+                self.use_vad = False
+                return
+            
+            # Validate sample rate
+            valid_sample_rates = [8000, 16000, 32000, 48000]
+            sample_rate = self.config["sample_rate"]
+            if sample_rate not in valid_sample_rates:
+                self.logger.warning(
+                    f"Sample rate {sample_rate} not supported by WebRTC VAD. "
+                    f"Valid rates: {valid_sample_rates}. "
+                    f"Falling back to RMS-only detection."
+                )
+                self.use_vad = False
+                return
+            
+            # Validate frame duration
+            valid_durations = [10, 20, 30]
+            frame_duration = self.config["vad_frame_duration_ms"]
+            if frame_duration not in valid_durations:
+                self.logger.warning(
+                    f"Frame duration {frame_duration}ms not supported by WebRTC VAD. "
+                    f"Valid durations: {valid_durations}ms. Using 30ms."
+                )
+                self.config["vad_frame_duration_ms"] = 30
+            
+            # Validate aggressiveness
+            aggressiveness = self.config["vad_aggressiveness"]
+            if not 0 <= aggressiveness <= 3:
+                self.logger.warning(
+                    f"VAD aggressiveness {aggressiveness} out of range (0-3). Using 2."
+                )
+                self.config["vad_aggressiveness"] = 2
+            
+            try:
+                self.vad = webrtcvad.Vad(self.config["vad_aggressiveness"])
+                self.logger.info(
+                    f"WebRTC VAD initialized: aggressiveness={self.config['vad_aggressiveness']}, "
+                    f"frame_duration={self.config['vad_frame_duration_ms']}ms"
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to initialize WebRTC VAD: {e}")
+                self.use_vad = False
+        else:
+            self.logger.info("WebRTC VAD disabled, using RMS-only detection")
 
     def _validate_dependencies(self):
         """Check for required external dependencies."""
@@ -219,6 +292,46 @@ class AudioRecorder:
         except struct.error:
             return 0.0
 
+    def _check_for_speech(self, audio_chunk: bytes, sample_rate: int) -> tuple[bool, float]:
+        """
+        Two-stage speech detection: RMS pre-filter + WebRTC VAD.
+        
+        Args:
+            audio_chunk: Raw PCM audio data
+            sample_rate: Audio sample rate
+            
+        Returns:
+            tuple: (is_speech, rms_level)
+        """
+        # Stage 1: RMS pre-filter (cheap, filters absolute silence)
+        rms = self._calculate_rms(audio_chunk)
+        
+        # Parse noise floor threshold
+        noise_floor_str = self.config["noise_floor_threshold"].rstrip('%')
+        noise_floor_percent = float(noise_floor_str)
+        
+        if rms < noise_floor_percent:
+            # Definitely silence/noise floor - skip VAD processing
+            return False, rms
+        
+        # Stage 2: WebRTC VAD (more expensive but accurate)
+        if self.use_vad and self.vad:
+            try:
+                # VAD requires exact frame sizes
+                is_speech = self.vad.is_speech(audio_chunk, sample_rate)
+                return is_speech, rms
+            except Exception as e:
+                self.logger.debug(f"VAD error: {e}, falling back to RMS")
+                # Fall back to RMS threshold if VAD fails
+                silence_threshold_str = self.config["silence_threshold"].rstrip('%')
+                silence_threshold_percent = float(silence_threshold_str)
+                return rms >= silence_threshold_percent, rms
+        else:
+            # VAD disabled or unavailable, use RMS threshold
+            silence_threshold_str = self.config["silence_threshold"].rstrip('%')
+            silence_threshold_percent = float(silence_threshold_str)
+            return rms >= silence_threshold_percent, rms
+
     def _record_segment(self, temp_file: str) -> bool:
         """Record a single audio segment with Python-based silence detection."""
         try:
@@ -226,10 +339,6 @@ class AudioRecorder:
             min_duration = self.config["min_duration"]
             sample_rate = self.config["sample_rate"]
             channels = self.config["channels"]
-            
-            # Parse silence threshold percentage (e.g., "3%" -> 3.0)
-            silence_threshold_str = self.config["silence_threshold"].rstrip('%')
-            silence_threshold_percent = float(silence_threshold_str)
             silence_duration = self.config["silence_duration"]
 
             # Start arecord with leading silence detection to wait for sound
@@ -267,10 +376,11 @@ class AudioRecorder:
             if self.config["compression_format"] != "wav":
                 sox_write_cmd.extend(["-C", "0"])
 
+            detection_method = "WebRTC VAD + RMS" if self.use_vad else "RMS only"
             self.logger.info(f"Starting recording: {temp_file}")
             self.logger.info(
+                f"Detection method: {detection_method}, "
                 f"Minimum duration: {min_duration}s, "
-                f"Silence threshold: {silence_threshold_percent}%, "
                 f"Silence duration: {silence_duration}s"
             )
 
@@ -291,7 +401,13 @@ class AudioRecorder:
 
             start_time = time.time()
             silence_start_time = None
-            chunk_size = sample_rate * channels * 2  # 1 second of audio (2 bytes per sample)
+            
+            # Calculate frame size for VAD (frame duration in samples)
+            vad_frame_duration_ms = self.config["vad_frame_duration_ms"]
+            vad_frame_size = (sample_rate * vad_frame_duration_ms // 1000) * channels * 2
+            
+            # Use VAD frame size if enabled, otherwise 1 second chunks
+            chunk_size = vad_frame_size if self.use_vad else sample_rate * channels * 2
             sound_detected = False
             
             while self.recording_active and not self.shutdown_requested:
@@ -310,7 +426,11 @@ class AudioRecorder:
                 # Read audio chunk
                 try:
                     audio_chunk = arecord_proc.stdout.read(chunk_size)
-                    if not audio_chunk:
+                    if not audio_chunk or len(audio_chunk) < chunk_size:
+                        # Incomplete chunk, might be end of stream
+                        if audio_chunk and sox_proc.stdin:
+                            sox_proc.stdin.write(audio_chunk)
+                            sox_proc.stdin.flush()
                         break
                     
                     # Write to SoX
@@ -320,11 +440,14 @@ class AudioRecorder:
                     
                     # Wait for initial sound detection (leading silence skip)
                     if not sound_detected:
-                        rms = self._calculate_rms(audio_chunk)
-                        if rms >= silence_threshold_percent:
+                        is_speech, rms = self._check_for_speech(audio_chunk, sample_rate)
+                        if is_speech:
                             sound_detected = True
-                            start_time = time.time()  # Reset timer when sound first detected
-                            self.logger.info(f"Sound detected (RMS: {rms:.2f}%), starting recording timer")
+                            start_time = time.time()  # Reset timer when speech first detected
+                            detection_type = "Speech" if self.use_vad else "Sound"
+                            self.logger.info(
+                                f"{detection_type} detected (RMS: {rms:.2f}%), starting recording timer"
+                            )
                         continue
                     
                     # After sound detected, check timing and silence
@@ -332,25 +455,33 @@ class AudioRecorder:
                     
                     # Only check for silence after minimum duration
                     if elapsed_time >= min_duration:
-                        rms = self._calculate_rms(audio_chunk)
+                        is_speech, rms = self._check_for_speech(audio_chunk, sample_rate)
                         
-                        if rms < silence_threshold_percent:
-                            # Silence detected
+                        if not is_speech:
+                            # Silence/non-speech detected
                             if silence_start_time is None:
                                 silence_start_time = time.time()
-                                self.logger.debug(f"Silence started at {elapsed_time:.1f}s (RMS: {rms:.2f}%)")
+                                detection_type = "Non-speech" if self.use_vad else "Silence"
+                                self.logger.debug(
+                                    f"{detection_type} started at {elapsed_time:.1f}s (RMS: {rms:.2f}%)"
+                                )
                             else:
                                 silence_elapsed = time.time() - silence_start_time
                                 if silence_elapsed >= silence_duration:
+                                    detection_type = "non-speech" if self.use_vad else "silence"
                                     self.logger.info(
-                                        f"Silence threshold met ({silence_elapsed:.1f}s >= {silence_duration}s), "
+                                        f"Continuous {detection_type} threshold met "
+                                        f"({silence_elapsed:.1f}s >= {silence_duration}s), "
                                         f"stopping recording at {elapsed_time:.1f}s"
                                     )
                                     break
                         else:
-                            # Sound detected, reset silence timer
+                            # Speech detected, reset silence timer
                             if silence_start_time is not None:
-                                self.logger.debug(f"Sound resumed at {elapsed_time:.1f}s (RMS: {rms:.2f}%)")
+                                detection_type = "Speech" if self.use_vad else "Sound"
+                                self.logger.debug(
+                                    f"{detection_type} resumed at {elapsed_time:.1f}s (RMS: {rms:.2f}%)"
+                                )
                             silence_start_time = None
                     
                 except IOError as e:
