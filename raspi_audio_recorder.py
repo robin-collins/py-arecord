@@ -12,8 +12,10 @@ import datetime
 import logging
 import os
 import signal
+import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -195,11 +197,42 @@ class AudioRecorder:
             self.logger.warning(f"Error creating overlap buffer: {e}")
             return None
 
+    def _calculate_rms(self, audio_chunk: bytes) -> float:
+        """Calculate RMS (Root Mean Square) audio level from PCM data."""
+        if len(audio_chunk) == 0:
+            return 0.0
+        
+        # S16_LE = signed 16-bit little-endian
+        sample_count = len(audio_chunk) // 2
+        if sample_count == 0:
+            return 0.0
+        
+        # Unpack audio samples
+        fmt = f"<{sample_count}h"  # little-endian signed shorts
+        try:
+            samples = struct.unpack(fmt, audio_chunk[:sample_count * 2])
+            # Calculate RMS
+            sum_squares = sum(sample ** 2 for sample in samples)
+            rms = (sum_squares / sample_count) ** 0.5
+            # Normalize to 0-100 scale (max value for 16-bit is 32768)
+            return (rms / 32768.0) * 100.0
+        except struct.error:
+            return 0.0
+
     def _record_segment(self, temp_file: str) -> bool:
-        """Record a single audio segment with silence detection."""
+        """Record a single audio segment with Python-based silence detection."""
         try:
             max_duration_seconds = self.config["max_duration"] * 60
+            min_duration = self.config["min_duration"]
+            sample_rate = self.config["sample_rate"]
+            channels = self.config["channels"]
+            
+            # Parse silence threshold percentage (e.g., "3%" -> 3.0)
+            silence_threshold_str = self.config["silence_threshold"].rstrip('%')
+            silence_threshold_percent = float(silence_threshold_str)
+            silence_duration = self.config["silence_duration"]
 
+            # Start arecord with leading silence detection to wait for sound
             arecord_cmd = [
                 "arecord",
                 "-D",
@@ -207,62 +240,127 @@ class AudioRecorder:
                 "-f",
                 "S16_LE",
                 "-c",
-                str(self.config["channels"]),
+                str(channels),
                 "-r",
-                str(self.config["sample_rate"]),
+                str(sample_rate),
                 "-t",
-                "wav",
+                "raw",  # Raw PCM output for Python processing
             ]
 
-            sox_silence_cmd = [
+            # SoX to write the file (without silence detection)
+            sox_write_cmd = [
                 "sox",
                 "-t",
-                "wav",
+                "raw",
+                "-r",
+                str(sample_rate),
+                "-c",
+                str(channels),
+                "-e",
+                "signed",
+                "-b",
+                "16",
                 "-",
                 temp_file,
-                "silence",
-                "1",
-                "0.1",
-                self.config["silence_threshold"],
-                "1",
-                f"{self.config['silence_duration']}",
-                self.config["silence_threshold"],
             ]
 
             if self.config["compression_format"] != "wav":
-                sox_silence_cmd.extend(["-C", "0"])
+                sox_write_cmd.extend(["-C", "0"])
 
             self.logger.info(f"Starting recording: {temp_file}")
-
-            arecord_proc = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE)
-            sox_proc = subprocess.Popen(
-                sox_silence_cmd, stdin=arecord_proc.stdout, stderr=subprocess.PIPE
+            self.logger.info(
+                f"Minimum duration: {min_duration}s, "
+                f"Silence threshold: {silence_threshold_percent}%, "
+                f"Silence duration: {silence_duration}s"
             )
-            arecord_proc.stdout.close()
+
+            # Start processes
+            arecord_proc = subprocess.Popen(
+                arecord_cmd, 
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            sox_proc = subprocess.Popen(
+                sox_write_cmd, 
+                stdin=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
 
             self.current_process = arecord_proc
             self.recording_active = True
 
             start_time = time.time()
-            min_duration = self.config["min_duration"]
+            silence_start_time = None
+            chunk_size = sample_rate * channels * 2  # 1 second of audio (2 bytes per sample)
+            sound_detected = False
             
             while self.recording_active and not self.shutdown_requested:
                 elapsed_time = time.time() - start_time
                 
-                # Check if SoX stopped due to silence detection
-                if arecord_proc.poll() is not None or sox_proc.poll() is not None:
-                    self.logger.info(
-                        f"Silence detected, recording stopped at {elapsed_time:.1f}s"
-                    )
+                # Check if processes died
+                if arecord_proc.poll() is not None:
+                    self.logger.warning("arecord process terminated unexpectedly")
                     break
                 
                 # Emergency stop at maximum duration
                 if elapsed_time >= max_duration_seconds:
-                    self.logger.info("Maximum duration reached, stopping recording")
+                    self.logger.info(f"Maximum duration reached ({elapsed_time:.1f}s), stopping recording")
                     break
 
-                time.sleep(1)
+                # Read audio chunk
+                try:
+                    audio_chunk = arecord_proc.stdout.read(chunk_size)
+                    if not audio_chunk:
+                        break
+                    
+                    # Write to SoX
+                    if sox_proc.stdin:
+                        sox_proc.stdin.write(audio_chunk)
+                        sox_proc.stdin.flush()
+                    
+                    # Wait for initial sound detection (leading silence skip)
+                    if not sound_detected:
+                        rms = self._calculate_rms(audio_chunk)
+                        if rms >= silence_threshold_percent:
+                            sound_detected = True
+                            start_time = time.time()  # Reset timer when sound first detected
+                            self.logger.info(f"Sound detected (RMS: {rms:.2f}%), starting recording timer")
+                        continue
+                    
+                    # After sound detected, check timing and silence
+                    elapsed_time = time.time() - start_time
+                    
+                    # Only check for silence after minimum duration
+                    if elapsed_time >= min_duration:
+                        rms = self._calculate_rms(audio_chunk)
+                        
+                        if rms < silence_threshold_percent:
+                            # Silence detected
+                            if silence_start_time is None:
+                                silence_start_time = time.time()
+                                self.logger.debug(f"Silence started at {elapsed_time:.1f}s (RMS: {rms:.2f}%)")
+                            else:
+                                silence_elapsed = time.time() - silence_start_time
+                                if silence_elapsed >= silence_duration:
+                                    self.logger.info(
+                                        f"Silence threshold met ({silence_elapsed:.1f}s >= {silence_duration}s), "
+                                        f"stopping recording at {elapsed_time:.1f}s"
+                                    )
+                                    break
+                        else:
+                            # Sound detected, reset silence timer
+                            if silence_start_time is not None:
+                                self.logger.debug(f"Sound resumed at {elapsed_time:.1f}s (RMS: {rms:.2f}%)")
+                            silence_start_time = None
+                    
+                except IOError as e:
+                    self.logger.error(f"Error reading/writing audio data: {e}")
+                    break
 
+            # Clean shutdown
+            if sox_proc.stdin:
+                sox_proc.stdin.close()
+            
             arecord_proc.terminate()
             sox_proc.terminate()
 
@@ -278,7 +376,6 @@ class AudioRecorder:
 
             if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1000:
                 duration = time.time() - start_time
-                min_duration = self.config["min_duration"]
                 
                 # Check if recording met minimum duration requirement
                 if duration < min_duration:

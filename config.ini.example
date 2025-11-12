@@ -11,7 +11,7 @@ silence_duration_seconds = 2.0
 
 [recording]
 max_duration_minutes = 60
-min_duration_seconds = 45  # Recordings shorter than this are discarded (filters brief noises)
+min_duration_seconds = 45  # Silence detection disabled until reached, then activates
 overlap_minutes = 5
 
 [storage]

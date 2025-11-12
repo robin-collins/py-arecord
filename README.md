@@ -5,8 +5,9 @@ A Python-based continuous audio recording service for Raspberry Pi with silence-
 ## Features
 
 - Continuous audio recording from ALSA devices
-- Automatic silence-based segmentation
-- Configurable minimum recording duration (discards recordings shorter than threshold)
+- Python-based real-time audio level monitoring and silence detection
+- Configurable minimum recording duration (silence detection disabled until reached)
+- Automatic silence-based segmentation after minimum duration
 - Filters out brief noises and false triggers automatically
 - Overlap handling between segments to prevent conversation loss
 - UTC timestamp file naming with collision handling
@@ -76,7 +77,7 @@ silence_duration_seconds = 2.0     # Silence duration to trigger split
 
 [recording]
 max_duration_minutes = 60          # Maximum segment duration
-min_duration_seconds = 45          # Minimum recording duration (shorter recordings discarded)
+min_duration_seconds = 45          # Minimum recording duration before silence detection activates
 overlap_minutes = 5                # Overlap between segments
 
 [storage]
@@ -130,11 +131,48 @@ sudo systemctl stop raspi-audio-recorder
 sudo systemctl restart raspi-audio-recorder
 ```
 
+## Recording Behavior
+
+The service uses Python-based real-time audio level monitoring to control when recordings start and stop:
+
+### How It Works
+
+1. **Waits for sound**: Continuously monitors audio levels until sound is detected above the silence threshold
+2. **Starts recording**: When sound is detected, recording begins and the timer starts
+3. **Ignores silence initially**: For the first `min_duration_seconds` (e.g., 45 seconds), continues recording regardless of silence
+4. **Activates silence detection**: After minimum duration is reached, begins monitoring for silence
+5. **Stops on silence**: If silence is detected (below threshold for `silence_duration_seconds`), recording stops and file is saved
+6. **Continues on speech**: If speech continues beyond minimum duration, recording keeps going until silence is detected
+7. **Maximum duration**: If recording reaches `max_duration_minutes`, it stops and starts a new file with overlap
+
+### Example Scenarios
+
+**Scenario A**: Brief speech (15 seconds)
+- Sound detected → recording starts
+- Speech continues for 15 seconds, then silence
+- Recording continues until 45 seconds (minimum duration)
+- At 45 seconds, silence is detected → recording stops
+- Result: One 45-second recording
+
+**Scenario B**: Extended speech (5 minutes)
+- Sound detected → recording starts
+- Speech continues for 5 minutes
+- At 45 seconds: minimum duration reached, silence detection activates
+- At 5 minutes: speech ends, silence detected → recording stops
+- Result: One 5-minute recording
+
+**Scenario C**: Very long speech (130 minutes)
+- Sound detected → recording starts
+- Speech continues past 120 minutes (max duration)
+- At 120 minutes: recording stops, new recording starts with 2-minute overlap
+- Speech continues for another 10 minutes, then silence detected
+- Result: Two recordings (120 minutes and 12 minutes with 2-minute overlap)
+
 ## File Output
 
-Recordings are saved as WAV files with UTC timestamps:
-- Format: `audio_YYYYMMDD_HHMMSS.wav`
-- Collision handling: `audio_YYYYMMDD_HHMMSS_vN.wav`
+Recordings are saved with UTC timestamps and sample rate:
+- Format: `audio_YYYYMMDD_HHMMSS_NNkHz.{ext}`
+- Collision handling: `audio_YYYYMMDD_HHMMSS_NNkHz_vN.{ext}`
 - Location: Configured storage directory (default: `/mnt/shared/raspi-audio`)
 
 ## Troubleshooting

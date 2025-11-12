@@ -14,18 +14,22 @@ All notable changes to this project will be documented in this file.
 - Sample rate included in filename format (e.g., `audio_20241201_143025_44kHz.flac`)
 - Compression format configuration in `config.ini`
 - Temporary folder recording with atomic file moves for data integrity
+- Python-based real-time audio level monitoring for precise silence detection
 - Minimum recording duration enforcement via `min_duration_seconds` configuration parameter (default: 45 seconds)
-- Recordings that end before minimum duration (due to early silence) are discarded and recording continues
-- System waits for sound, records until silence is detected, and only saves if duration >= minimum threshold
+- Silence detection is disabled until minimum duration is reached, then activates automatically
+- System waits for sound, records for at least min_duration, then stops on silence detection
+- If speech continues beyond minimum duration, recording continues until silence is detected
 - Ensures all saved recordings have meaningful content and filters out brief noise/false triggers
 
 ### Changed
+- **Silence detection architecture**: Moved from SoX-based to Python-based real-time audio level monitoring
 - Filename format now includes sample rate: `audio_YYYYMMDD_HHMMSS_NNkHz.{ext}`
 - Overlap buffer files now use the same compression format as recordings
 - SoX compression flags automatically applied for non-WAV formats
 - Recordings are now created in a temporary directory first, then moved to final location when complete
 - Overlap buffers are now stored in temporary directory during processing
 - Improved cleanup of temporary files on shutdown or failure
+- Audio processing now reads raw PCM data for level analysis before writing to final format
 
 ### Technical Notes
 - Requires SoX with appropriate codec support for chosen compression format
