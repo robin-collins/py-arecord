@@ -11,6 +11,9 @@ All notable changes to this project will be documented in this file.
 - Service file now uses storage directory from `config.ini` instead of hardcoded `/mnt/shared/raspi-audio`
 - Install script now uses `config.ini` values by default without prompting (only prompts to change if explicitly requested)
 - Added placeholder substitution for `ReadWritePaths` in systemd service file to match configured storage directory
+- **Critical fix**: Recording loop no longer exits immediately on partial audio chunks (was causing rapid start/stop cycle with empty files)
+- Added comprehensive error logging for arecord and sox process failures with stderr capture
+- Added debug logging for VAD frame sizes and audio detection status
 
 ### Added
 - Lossless compression support with configurable format option (wav, flac, alac, ape)

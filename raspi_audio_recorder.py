@@ -410,12 +410,35 @@ class AudioRecorder:
             chunk_size = vad_frame_size if self.use_vad else sample_rate * channels * 2
             sound_detected = False
             
+            self.logger.debug(f"VAD frame size: {vad_frame_size} bytes, chunk size: {chunk_size} bytes")
+            self.logger.info("Waiting for speech/sound to start recording...")
+            
             while self.recording_active and not self.shutdown_requested:
                 elapsed_time = time.time() - start_time
                 
                 # Check if processes died
-                if arecord_proc.poll() is not None:
-                    self.logger.warning("arecord process terminated unexpectedly")
+                arecord_status = arecord_proc.poll()
+                sox_status = sox_proc.poll()
+                
+                if arecord_status is not None:
+                    self.logger.error(
+                        f"arecord process terminated unexpectedly with code {arecord_status}"
+                    )
+                    # Get stderr output if available
+                    if arecord_proc.stderr:
+                        stderr_output = arecord_proc.stderr.read()
+                        if stderr_output:
+                            self.logger.error(f"arecord stderr: {stderr_output.decode('utf-8', errors='ignore')}")
+                    break
+                
+                if sox_status is not None:
+                    self.logger.error(
+                        f"sox process terminated unexpectedly with code {sox_status}"
+                    )
+                    if sox_proc.stderr:
+                        stderr_output = sox_proc.stderr.read()
+                        if stderr_output:
+                            self.logger.error(f"sox stderr: {stderr_output.decode('utf-8', errors='ignore')}")
                     break
                 
                 # Emergency stop at maximum duration
@@ -426,17 +449,21 @@ class AudioRecorder:
                 # Read audio chunk
                 try:
                     audio_chunk = arecord_proc.stdout.read(chunk_size)
-                    if not audio_chunk or len(audio_chunk) < chunk_size:
-                        # Incomplete chunk, might be end of stream
-                        if audio_chunk and sox_proc.stdin:
-                            sox_proc.stdin.write(audio_chunk)
-                            sox_proc.stdin.flush()
+                    if not audio_chunk:
+                        # No data available, stream ended
+                        self.logger.warning("No audio data received from arecord")
                         break
                     
-                    # Write to SoX
+                    # Write to SoX (write whatever we got)
                     if sox_proc.stdin:
                         sox_proc.stdin.write(audio_chunk)
                         sox_proc.stdin.flush()
+                    
+                    # Only process for speech detection if we have a full VAD frame
+                    # For partial chunks, just write and continue
+                    if len(audio_chunk) < chunk_size:
+                        # Incomplete chunk, skip detection this iteration
+                        continue
                     
                     # Wait for initial sound detection (leading silence skip)
                     if not sound_detected:
