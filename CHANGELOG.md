@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Service file now uses storage directory from `config.ini` instead of hardcoded `/mnt/shared/raspi-audio`
+- Install script now uses `config.ini` values by default without prompting (only prompts to change if explicitly requested)
+- Added placeholder substitution for `ReadWritePaths` in systemd service file to match configured storage directory
+
 ### Added
 - Lossless compression support with configurable format option (wav, flac, alac, ape)
 - Sample rate included in filename format (e.g., `audio_20241201_143025_44kHz.flac`)

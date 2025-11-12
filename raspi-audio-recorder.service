@@ -31,7 +31,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/mnt/shared/raspi-audio /opt/raspi-audio-recorder
+ReadWritePaths=__STORAGE_DIR__ /opt/raspi-audio-recorder
 SupplementaryGroups=audio
 
 # Logging

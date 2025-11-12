@@ -167,6 +167,7 @@ install_service() {
     print_info "Installing systemd service..."
     sed -e "s|/opt/raspi-audio-recorder|${INSTALL_DIR}|g" \
         -e "s|User=pi|User=${SYSTEM_USER}|g" \
+        -e "s|__STORAGE_DIR__|${STORAGE_DIR}|g" \
         "${SERVICE_FILE}" > "/etc/systemd/system/${SERVICE_FILE}"
     
     chmod 644 "/etc/systemd/system/${SERVICE_FILE}"
@@ -213,6 +214,7 @@ update_service() {
         print_info "Updating systemd service..."
         sed -e "s|/opt/raspi-audio-recorder|${INSTALL_DIR}|g" \
             -e "s|User=pi|User=${SYSTEM_USER}|g" \
+            -e "s|__STORAGE_DIR__|${STORAGE_DIR}|g" \
             "${SERVICE_FILE}" > "/etc/systemd/system/${SERVICE_FILE}"
         
         systemctl daemon-reload
@@ -384,7 +386,17 @@ check_root
 case "${ACTION}" in
     install)
         if [ "$NON_INTERACTIVE" = false ]; then
-            prompt_settings
+            print_info "Installation will use the following settings:"
+            echo "  Installation directory: ${INSTALL_DIR}"
+            echo "  Storage directory: ${STORAGE_DIR}"
+            echo "  System user: ${SYSTEM_USER}"
+            echo "  Audio group: ${AUDIO_GROUP}"
+            echo
+            read -p "Change these settings? (y/N): " change_settings
+            if [[ "$change_settings" =~ ^[Yy]$ ]]; then
+                prompt_settings
+            fi
+            echo
             read -p "Proceed with installation? (Y/n): " confirm
             if [[ "$confirm" =~ ^[Nn]$ ]]; then
                 print_info "Installation cancelled"
