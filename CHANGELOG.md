@@ -29,11 +29,16 @@ All notable changes to this project will be documented in this file.
 - Added placeholder substitution for `ReadWritePaths` in systemd service file to match configured storage directory
 - **Critical fix**: Recording loop no longer exits immediately on partial audio chunks (was causing rapid start/stop cycle with empty files)
 - **Critical fix**: Sox command-line argument order corrected (compression flag now before output filename, not after)
+- **Critical fix**: Added channel validation for WebRTC VAD (mono only) - prevents runtime crashes with stereo audio configurations
 - Added comprehensive error logging for arecord and sox process failures with stderr capture
 - Added debug logging for VAD frame sizes, chunk sizes, and actual command-line arguments
 - Added audio device accessibility test before starting recording loop
 - Added startup delay and process validation to catch immediate failures
 - Added exponential backoff for consecutive recording failures (prevents tight error loops)
+- Improved process termination order (arecord → sox) to prevent SIGPIPE warnings
+- VAD processing errors now logged at WARNING level instead of DEBUG for better visibility
+- Added VAD frame size validation to catch odd byte counts with non-standard sample rates
+- Extracted magic number (1000 bytes) to named constant MIN_VALID_FILE_SIZE for clarity
 
 ### Changed
 - **Silence detection architecture**: Moved from SoX-based to Python-based real-time audio level monitoring

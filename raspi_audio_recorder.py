@@ -27,6 +27,9 @@ except ImportError:
 
 
 class AudioRecorder:
+    # Minimum valid file size in bytes (audio file header + some data)
+    MIN_VALID_FILE_SIZE = 1000
+
     def __init__(self, config_path: str):
         self.config = self._load_config(config_path)
         self.recording_active = False
@@ -108,7 +111,7 @@ class AudioRecorder:
         """Initialize WebRTC VAD if enabled and available."""
         self.vad = None
         self.use_vad = self.config["use_vad"]
-        
+
         if self.use_vad:
             if not WEBRTCVAD_AVAILABLE:
                 self.logger.warning(
@@ -118,7 +121,17 @@ class AudioRecorder:
                 )
                 self.use_vad = False
                 return
-            
+
+            # Validate channels (WebRTC VAD requires mono)
+            channels = self.config["channels"]
+            if channels != 1:
+                self.logger.warning(
+                    f"WebRTC VAD requires mono audio (channels=1), got channels={channels}. "
+                    f"Falling back to RMS-only detection."
+                )
+                self.use_vad = False
+                return
+
             # Validate sample rate
             valid_sample_rates = [8000, 16000, 32000, 48000]
             sample_rate = self.config["sample_rate"]
@@ -321,7 +334,10 @@ class AudioRecorder:
                 is_speech = self.vad.is_speech(audio_chunk, sample_rate)
                 return is_speech, rms
             except Exception as e:
-                self.logger.debug(f"VAD error: {e}, falling back to RMS")
+                self.logger.warning(
+                    f"VAD processing error (chunk size: {len(audio_chunk)} bytes): {e}. "
+                    f"Falling back to RMS threshold."
+                )
                 # Fall back to RMS threshold if VAD fails
                 silence_threshold_str = self.config["silence_threshold"].rstrip('%')
                 silence_threshold_percent = float(silence_threshold_str)
@@ -466,11 +482,21 @@ class AudioRecorder:
 
             start_time = time.time()
             silence_start_time = None
-            
+
             # Calculate frame size for VAD (frame duration in samples)
             vad_frame_duration_ms = self.config["vad_frame_duration_ms"]
             vad_frame_size = (sample_rate * vad_frame_duration_ms // 1000) * channels * 2
-            
+
+            # Validate frame size is even (required for 16-bit PCM)
+            if self.use_vad and vad_frame_size % 2 != 0:
+                self.logger.error(
+                    f"Invalid VAD frame size: {vad_frame_size} bytes (not even). "
+                    f"Sample rate {sample_rate} Hz incompatible with VAD. "
+                    f"Falling back to RMS-only detection."
+                )
+                self.use_vad = False
+                vad_frame_size = sample_rate * channels * 2  # Use 1-second chunks instead
+
             # Use VAD frame size if enabled, otherwise 1 second chunks
             chunk_size = vad_frame_size if self.use_vad else sample_rate * channels * 2
             sound_detected = False
@@ -580,24 +606,36 @@ class AudioRecorder:
                     self.logger.error(f"Error reading/writing audio data: {e}")
                     break
 
-            # Clean shutdown
-            if sox_proc.stdin:
-                sox_proc.stdin.close()
-            
+            # Clean shutdown - terminate data source first
             arecord_proc.terminate()
-            sox_proc.terminate()
-
             try:
-                arecord_proc.wait(timeout=5)
-                sox_proc.wait(timeout=5)
+                arecord_proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                self.logger.warning("arecord did not terminate gracefully, killing...")
                 arecord_proc.kill()
+                try:
+                    arecord_proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass  # Process is dead
+
+            # Then close sink and terminate sox
+            if sox_proc.stdin:
+                try:
+                    sox_proc.stdin.close()
+                except Exception as e:
+                    self.logger.debug(f"Error closing sox stdin: {e}")
+
+            sox_proc.terminate()
+            try:
+                sox_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.logger.warning("sox did not terminate gracefully, killing...")
                 sox_proc.kill()
 
             self.recording_active = False
             self.current_process = None
 
-            if os.path.exists(temp_file) and os.path.getsize(temp_file) > 1000:
+            if os.path.exists(temp_file) and os.path.getsize(temp_file) > self.MIN_VALID_FILE_SIZE:
                 duration = time.time() - start_time
                 
                 # Check if recording met minimum duration requirement

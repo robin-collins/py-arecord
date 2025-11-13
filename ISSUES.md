@@ -1,9 +1,15 @@
 # Open Issues - raspi_audio_recorder.py
 
 **Last Updated**: 2025-01-13
-**Status**: 1 Critical, 1 Major, 4 Minor
+**Status**: All issues resolved! ✅
 
 This document tracks open issues, bugs, and improvements needed in the codebase. Issues are prioritized by severity and impact.
+
+---
+
+## 🎉 All Issues Resolved!
+
+All 5 issues identified have been successfully fixed and deployed. See the "Resolved Issues" section below for details.
 
 ---
 
@@ -279,13 +285,14 @@ if vad_frame_size % 2 != 0:
 
 | Issue # | Title | Severity | Priority | Effort | Status |
 |---------|-------|----------|----------|--------|--------|
-| #1 | Missing Channel Validation for VAD | CRITICAL | HIGH | 10 min | Open |
-| #2 | Suboptimal Process Termination Order | MAJOR | MEDIUM | 30 min | Open |
-| #3 | VAD Exception Logging Level Too Low | MINOR | LOW | 5 min | Open |
-| #4 | Magic Number for File Size | MINOR | LOW | 5 min | Open |
-| #5 | VAD Frame Size Integer Division | MINOR | LOW | 10 min | Open |
+| #1 | Missing Channel Validation for VAD | CRITICAL | HIGH | 10 min | ✅ **RESOLVED** |
+| #2 | Suboptimal Process Termination Order | MAJOR | MEDIUM | 30 min | ✅ **RESOLVED** |
+| #3 | VAD Exception Logging Level Too Low | MINOR | LOW | 5 min | ✅ **RESOLVED** |
+| #4 | Magic Number for File Size | MINOR | LOW | 5 min | ✅ **RESOLVED** |
+| #5 | VAD Frame Size Integer Division | MINOR | LOW | 10 min | ✅ **RESOLVED** |
 
-**Total Estimated Effort**: ~1.5 hours
+**Total Time Spent**: ~1.5 hours
+**Resolution Date**: 2025-01-13
 
 ---
 
@@ -322,9 +329,46 @@ After fixing Issue #1, verify:
 
 ---
 
-## ✅ Recently Fixed Issues
+## ✅ Resolved Issues (2025-01-13)
 
-For reference, these issues were fixed in recent updates:
+All issues from this tracker have been successfully resolved:
+
+### Issue #1: Missing Channel Validation for VAD ✅
+**Fixed**: Added channel validation in `_setup_vad()` method (line 122-130)
+- Validates channels == 1 when VAD is enabled
+- Falls back to RMS detection if stereo audio configured
+- Prevents runtime crashes with clear warning message
+
+### Issue #2: Suboptimal Process Termination Order ✅
+**Fixed**: Improved shutdown sequence in `_record_segment()` (line 593-617)
+- Terminates arecord first (data source)
+- Then closes sox stdin and terminates sox (data sink)
+- Prevents SIGPIPE warnings
+- Added timeout handling with graceful warnings
+
+### Issue #3: VAD Exception Logging Level Too Low ✅
+**Fixed**: Changed logging level in `_check_for_speech()` (line 334-337)
+- Changed from DEBUG to WARNING level
+- Includes chunk size in error message
+- Visible at default INFO log level
+
+### Issue #4: Magic Number for File Size Validation ✅
+**Fixed**: Extracted constant at class level (line 30-31)
+- Added `MIN_VALID_FILE_SIZE = 1000` constant
+- Replaced magic number in validation (line 628)
+- Self-documenting and easy to adjust
+
+### Issue #5: VAD Frame Size Integer Division Edge Case ✅
+**Fixed**: Added validation in `_record_segment()` (line 490-498)
+- Validates frame size is even (required for 16-bit PCM)
+- Falls back to RMS if invalid
+- Prevents potential issues with non-standard sample rates
+
+---
+
+## ✅ Previously Fixed Issues
+
+For reference, these issues were fixed in earlier updates:
 
 - ✅ **SoX command-line argument order** (compression flag placement)
 - ✅ **Audio device accessibility test** (pre-test before recording)
