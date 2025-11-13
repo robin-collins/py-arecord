@@ -5,17 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **ARCHITECTURE.md**: Comprehensive technical documentation describing audio capture pipeline, silence detection system, file management, and production deployment configuration
-
-### Fixed
-- Service file now uses storage directory from `config.ini` instead of hardcoded `/mnt/shared/raspi-audio`
-- Install script now uses `config.ini` values by default without prompting (only prompts to change if explicitly requested)
-- Added placeholder substitution for `ReadWritePaths` in systemd service file to match configured storage directory
-- **Critical fix**: Recording loop no longer exits immediately on partial audio chunks (was causing rapid start/stop cycle with empty files)
-- Added comprehensive error logging for arecord and sox process failures with stderr capture
-- Added debug logging for VAD frame sizes and audio detection status
-
-### Added
+- **ARCHITECTURE.md**: Comprehensive technical documentation describing audio capture pipeline, WebRTC VAD integration, silence detection system, file management, and production deployment configuration
+- **CODE_ANALYSIS.md**: Detailed code review identifying logic flaws, exception handling gaps, security considerations, and performance analysis with prioritized recommendations (updated to reflect recent fixes)
+- **ISSUES.md**: Actionable issue tracker with prioritized list of bugs, improvements, and edge cases to address (6 issues total: 1 critical, 1 major, 4 minor)
 - Lossless compression support with configurable format option (wav, flac, alac, ape)
 - Sample rate included in filename format (e.g., `audio_20241201_143025_44kHz.flac`)
 - Compression format configuration in `config.ini`
@@ -30,6 +22,18 @@ All notable changes to this project will be documented in this file.
 - System waits for speech, records for at least min_duration, then stops on silence/non-speech detection
 - If speech continues beyond minimum duration, recording continues until silence is detected
 - Filters out door slams, machinery noise, and other non-speech sounds automatically
+
+### Fixed
+- Service file now uses storage directory from `config.ini` instead of hardcoded `/mnt/shared/raspi-audio`
+- Install script now uses `config.ini` values by default without prompting (only prompts to change if explicitly requested)
+- Added placeholder substitution for `ReadWritePaths` in systemd service file to match configured storage directory
+- **Critical fix**: Recording loop no longer exits immediately on partial audio chunks (was causing rapid start/stop cycle with empty files)
+- **Critical fix**: Sox command-line argument order corrected (compression flag now before output filename, not after)
+- Added comprehensive error logging for arecord and sox process failures with stderr capture
+- Added debug logging for VAD frame sizes, chunk sizes, and actual command-line arguments
+- Added audio device accessibility test before starting recording loop
+- Added startup delay and process validation to catch immediate failures
+- Added exponential backoff for consecutive recording failures (prevents tight error loops)
 
 ### Changed
 - **Silence detection architecture**: Moved from SoX-based to Python-based real-time audio level monitoring

@@ -332,6 +332,45 @@ class AudioRecorder:
             silence_threshold_percent = float(silence_threshold_str)
             return rms >= silence_threshold_percent, rms
 
+    def _test_audio_device(self) -> bool:
+        """Test if audio device is accessible before recording."""
+        try:
+            # Try to open the device briefly to verify it's accessible
+            test_cmd = [
+                "arecord",
+                "-D",
+                self.config["device"],
+                "-f",
+                "S16_LE",
+                "-c",
+                str(self.config["channels"]),
+                "-r",
+                str(self.config["sample_rate"]),
+                "-d",
+                "1",  # Record for 1 second
+                "-t",
+                "raw",
+                "/dev/null"  # Discard output
+            ]
+            
+            result = subprocess.run(
+                test_cmd,
+                capture_output=True,
+                timeout=5
+            )
+            
+            if result.returncode != 0:
+                self.logger.error(
+                    f"Audio device test failed: {result.stderr.decode('utf-8', errors='ignore')}"
+                )
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Audio device test error: {e}")
+            return False
+
     def _record_segment(self, temp_file: str) -> bool:
         """Record a single audio segment with Python-based silence detection."""
         try:
@@ -357,24 +396,23 @@ class AudioRecorder:
             ]
 
             # SoX to write the file (without silence detection)
+            # Format: sox [input-options] input-file [output-options] output-file
             sox_write_cmd = [
                 "sox",
-                "-t",
-                "raw",
-                "-r",
-                str(sample_rate),
-                "-c",
-                str(channels),
-                "-e",
-                "signed",
-                "-b",
-                "16",
-                "-",
-                temp_file,
+                "-t", "raw",           # Input type: raw PCM
+                "-r", str(sample_rate), # Input sample rate
+                "-c", str(channels),    # Input channels
+                "-e", "signed",         # Input encoding
+                "-b", "16",             # Input bit depth
+                "-",                    # Input from stdin
             ]
-
+            
+            # Add output options before output filename
             if self.config["compression_format"] != "wav":
-                sox_write_cmd.extend(["-C", "0"])
+                sox_write_cmd.extend(["-C", "0"])  # Compression level for output
+            
+            # Add output filename last
+            sox_write_cmd.append(temp_file)
 
             detection_method = "WebRTC VAD + RMS" if self.use_vad else "RMS only"
             self.logger.info(f"Starting recording: {temp_file}")
@@ -383,6 +421,8 @@ class AudioRecorder:
                 f"Minimum duration: {min_duration}s, "
                 f"Silence duration: {silence_duration}s"
             )
+            self.logger.debug(f"arecord command: {' '.join(arecord_cmd)}")
+            self.logger.debug(f"sox command: {' '.join(sox_write_cmd)}")
 
             # Start processes
             arecord_proc = subprocess.Popen(
@@ -398,6 +438,31 @@ class AudioRecorder:
 
             self.current_process = arecord_proc
             self.recording_active = True
+            
+            # Give processes a moment to start up
+            time.sleep(0.1)
+            
+            # Check if processes started successfully
+            arecord_status = arecord_proc.poll()
+            sox_status = sox_proc.poll()
+            
+            if arecord_status is not None:
+                stderr_output = arecord_proc.stderr.read() if arecord_proc.stderr else b""
+                self.logger.error(
+                    f"arecord failed to start (exit code {arecord_status}): "
+                    f"{stderr_output.decode('utf-8', errors='ignore')}"
+                )
+                sox_proc.terminate()
+                return False
+                
+            if sox_status is not None:
+                stderr_output = sox_proc.stderr.read() if sox_proc.stderr else b""
+                self.logger.error(
+                    f"sox failed to start (exit code {sox_status}): "
+                    f"{stderr_output.decode('utf-8', errors='ignore')}"
+                )
+                arecord_proc.terminate()
+                return False
 
             start_time = time.time()
             silence_start_time = None
@@ -631,14 +696,30 @@ class AudioRecorder:
         self.logger.info(
             f"Device: {self.config['device']}, Storage: {self.config['storage_path']}"
         )
+        
+        # Test audio device before starting
+        self.logger.info("Testing audio device accessibility...")
+        if not self._test_audio_device():
+            self.logger.error(
+                "Audio device test failed. Please check:"
+                "\n1. Device exists: arecord -l"
+                "\n2. Device not in use by another process"
+                "\n3. Permissions are correct"
+                "\n4. Device name in config.ini is correct"
+            )
+            # Continue anyway, but warn user
+            self.logger.warning("Continuing despite device test failure...")
 
         last_recording_file = None
+        consecutive_failures = 0
 
         while not self.shutdown_requested:
             try:
                 temp_file, final_file = self._generate_filename()
 
                 if self._record_segment(temp_file):
+                    consecutive_failures = 0  # Reset on success
+                    
                     if last_recording_file and self.overlap_buffer_path:
                         temp_file = self._merge_with_overlap(
                             self.overlap_buffer_path, temp_file
@@ -661,9 +742,18 @@ class AudioRecorder:
                             self.current_temp_files.discard(temp_file)
                 else:
                     # Recording didn't meet minimum duration or failed
-                    # Continue immediately to next recording attempt
-                    # (SoX will wait for sound via leading silence detection)
-                    time.sleep(1)
+                    consecutive_failures += 1
+                    
+                    # Back off if multiple failures in a row
+                    if consecutive_failures >= 5:
+                        backoff_time = min(30, consecutive_failures)
+                        self.logger.warning(
+                            f"{consecutive_failures} consecutive failures, "
+                            f"backing off for {backoff_time}s"
+                        )
+                        time.sleep(backoff_time)
+                    else:
+                        time.sleep(1)
 
             except KeyboardInterrupt:
                 break

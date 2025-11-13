@@ -35,27 +35,84 @@ ALSA (arecord) → Raw PCM → Python Analysis → SoX Writer → Compressed Fil
 
 ## Silence Detection System
 
-### Two-Phase Detection Model
+### WebRTC VAD Integration (NEW)
 
-The service implements sophisticated silence detection with two distinct phases:
+The service now supports **WebRTC Voice Activity Detection** for intelligent speech vs. noise discrimination:
+
+**Two-Stage Detection Architecture:**
+```
+Audio Chunk → Stage 1: RMS Pre-filter → Stage 2: WebRTC VAD → Speech/Non-speech Decision
+              (Fast, filters noise floor)   (Accurate, ML-based)
+```
+
+**Stage 1 - RMS Pre-filter** (`raspi_audio_recorder.py:306-315`):
+- Quick RMS calculation on audio chunk
+- Compares against `noise_floor_threshold` (default: 2.0%)
+- If RMS < noise floor → skip VAD processing (definitely silence)
+- Saves CPU by filtering absolute silence before expensive VAD
+
+**Stage 2 - WebRTC VAD** (`raspi_audio_recorder.py:318-322`):
+- Machine learning-based speech detection
+- Analyzes audio features (pitch, harmonics, formants)
+- Returns boolean: is_speech or not
+- Requires specific frame sizes (10/20/30ms at 8/16/32/48 kHz)
+- Falls back to RMS threshold if VAD unavailable or fails
+
+**Configuration:**
+- `use_vad`: Enable/disable VAD (default: true)
+- `vad_aggressiveness`: 0-3, higher = stricter speech detection
+  - 0 = Lenient (less filtering, captures more)
+  - 1 = Low-bitrate mode (balanced)
+  - 2 = Aggressive (production default for clean environments)
+  - 3 = Very aggressive (filters most non-speech)
+- `vad_frame_duration_ms`: 10, 20, or 30 (default: 30)
+- `noise_floor_threshold`: RMS pre-filter level (default: 2.0%)
+
+**Benefits:**
+- Filters out door slams, keyboard typing, HVAC noise, chair scraping
+- More accurate than RMS-only detection for speech
+- Reduces false triggers from non-speech sounds
+- CPU efficient with two-stage approach
+
+**Production Configuration** (config.ini):
+```ini
+use_vad = true
+vad_aggressiveness = 1              # Lenient for varied speech patterns
+vad_frame_duration_ms = 30          # 30ms frames (960 bytes @ 16kHz)
+noise_floor_threshold = 2.0%        # Pre-filter absolute silence
+silence_threshold = 5%              # Fallback if VAD disabled
+```
+
+### Two-Phase Recording Model
+
+The service implements sophisticated recording control with two distinct phases:
 
 #### Phase 1: Leading Silence Skip (Sound Detection)
 
 **Purpose**: Wait for actual sound before starting the recording timer
 
-**Location**: `raspi_audio_recorder.py:322-328`
+**Location**: `raspi_audio_recorder.py:469-478`
 
 **Behavior**:
 - Continuously monitors audio chunks before recording starts
-- Calculates RMS level for each 1-second chunk
-- When RMS ≥ silence threshold (e.g., 1%): sound detected
-- Resets the recording timer at first sound
+- Uses two-stage detection (RMS pre-filter + optional VAD)
+- **With VAD enabled**: Waits for actual speech detection
+- **With VAD disabled**: Waits for RMS ≥ silence threshold
+- Resets the recording timer when speech/sound first detected
 - Prevents recording long periods of silence at the beginning
 
-**Example**:
+**Example (with VAD)**:
+```
+[silence] [door slam] [typing] [SPEECH!] ← Timer starts here
+  (0%)      (8% RMS)   (4% RMS)  (VAD=true)
+                                    ↑
+                              Recording begins
+```
+
+**Example (without VAD)**:
 ```
 [silence] [silence] [SOUND!] ← Timer starts here
-                     ↑
+                     ↑ RMS ≥ 5%
               Recording begins
 ```
 
@@ -63,25 +120,37 @@ The service implements sophisticated silence detection with two distinct phases:
 
 **Purpose**: Stop recording after sustained silence, but only after minimum duration
 
-**Location**: `raspi_audio_recorder.py:333-354`
+**Location**: `raspi_audio_recorder.py:484-512`
 
 **Behavior**:
 - Only activates after `min_duration` seconds (default: 45s)
-- Tracks continuous silence duration
-- Stops recording when silence ≥ `silence_duration` seconds (default: 2s)
-- Resets silence timer if sound resumes
+- Tracks continuous silence/non-speech duration
+- **With VAD**: Stops when non-speech ≥ `silence_duration` seconds
+- **Without VAD**: Stops when silence ≥ `silence_duration` seconds
+- Resets silence timer if speech/sound resumes
 - Ensures recordings capture complete conversations
 
-**Example**:
+**Example (with VAD, production: 15s threshold)**:
+```
+[speech] [speech] [non-speech 5s] [non-speech 10s] [non-speech 15s] ← Stop
+                   (door slam)     (typing)         (silence)        ↑
+                                                               Threshold met
+```
+
+**Example (without VAD, default: 2s threshold)**:
 ```
 [sound] [sound] [silence 1s] [silence 2s] ← Stop recording
                               ↑
                       Silence threshold met
 ```
 
-### RMS Calculation
+### Speech Detection Methods
 
-**Method**: `_calculate_rms()` (`raspi_audio_recorder.py:200-220`)
+#### RMS Calculation
+
+**Method**: `_calculate_rms()` (`raspi_audio_recorder.py:273-293`)
+
+**Used For**: Pre-filtering and fallback detection
 
 **Algorithm**:
 ```python
@@ -92,19 +161,56 @@ Normalized_RMS = (RMS / 32768) × 100%
 - Unpacks S16_LE samples (range: -32768 to +32767)
 - Computes root mean square of sample values
 - Normalizes to 0-100% scale for threshold comparison
-- Processes 1-second chunks:
-  - Production (16 kHz): 16,000 samples/second
-  - Default (44.1 kHz): 44,100 samples/second
+- Processes variable chunk sizes:
+  - With VAD (16 kHz, 30ms frames): 480 samples = 960 bytes
+  - Without VAD (16 kHz, 1s chunks): 16,000 samples = 32,000 bytes
+  - Without VAD (44.1 kHz, 1s chunks): 44,100 samples = 88,200 bytes
+
+#### Two-Stage Speech Detection (NEW)
+
+**Method**: `_check_for_speech()` (`raspi_audio_recorder.py:295-333`)
+
+**Purpose**: Intelligent speech vs. noise discrimination
+
+**Process Flow**:
+```python
+1. Calculate RMS of audio chunk
+2. If RMS < noise_floor_threshold (2.0%):
+     → Return False (definitely silence, skip VAD)
+3. If VAD enabled and available:
+     → Run webrtcvad.is_speech(audio_chunk, sample_rate)
+     → Return VAD result + RMS level
+4. If VAD disabled/failed:
+     → Compare RMS to silence_threshold (5%)
+     → Return (RMS >= threshold, RMS level)
+```
+
+**Key Features**:
+- **Efficient**: RMS pre-filter prevents unnecessary VAD processing
+- **Robust**: Automatic fallback to RMS if VAD fails or unavailable
+- **Tunable**: Separate thresholds for noise floor vs. speech detection
+
+**Returns**: `tuple[bool, float]` - (is_speech, rms_level)
 
 ### Configuration Parameters
 
-| Parameter | Config Key | Default | Current Production | Purpose |
-|-----------|-----------|---------|-------------------|---------|
-| Silence Threshold | `silence_threshold` | 1% | **5%** | RMS level below which audio is "silent" |
-| Silence Duration | `silence_duration_seconds` | 2.0s | **15.0s** | How long silence must persist to stop |
-| Minimum Duration | `min_duration_seconds` | 45s | **45s** | Minimum recording length before checking silence |
+#### Speech/Silence Detection Parameters
 
-**Note**: Production config uses higher thresholds to handle noisier office environments and longer pauses in conversations.
+| Parameter | Config Key | Default | Production | Purpose |
+|-----------|-----------|---------|------------|---------|
+| **Use VAD** | `use_vad` | true | **true** | Enable WebRTC Voice Activity Detection |
+| **VAD Aggressiveness** | `vad_aggressiveness` | 2 | **1** | VAD filtering level (0-3, higher = stricter) |
+| **VAD Frame Duration** | `vad_frame_duration_ms` | 30 | **30** | Frame size for VAD (10/20/30 ms) |
+| **Noise Floor Threshold** | `noise_floor_threshold` | 1.0% | **2.0%** | RMS pre-filter (skip VAD if below) |
+| **Silence Threshold** | `silence_threshold` | 1% | **5%** | Fallback RMS threshold (if VAD disabled) |
+| **Silence Duration** | `silence_duration_seconds` | 2.0s | **15.0s** | How long silence must persist to stop |
+| **Minimum Duration** | `min_duration_seconds` | 45s | **45s** | Minimum recording before checking silence |
+
+**Notes**:
+- **VAD aggressiveness = 1**: Balanced mode, good for varied speech patterns and accents
+- **Noise floor = 2.0%**: Filters absolute silence without VAD overhead
+- **Silence threshold = 5%**: Only used when VAD disabled/unavailable
+- Production config optimized for office environment with speech detection
 
 ## File Management System
 
@@ -454,13 +560,19 @@ WantedBy=multi-user.target
 - SoX: Audio format conversion and file operations
 - ALSA: Audio device access (arecord)
 - systemd: Service management (optional but recommended)
+- **webrtcvad**: Voice Activity Detection (optional but recommended)
+  - Install: `pip install webrtcvad`
+  - If missing: Automatically falls back to RMS-only detection
 
-**Python Modules** (standard library only):
-- `subprocess`: External process management
-- `struct`: Binary PCM data parsing
-- `signal`: Graceful shutdown
-- `configparser`: Config file parsing
-- `pathlib`: File path operations
+**Python Modules**:
+- Standard Library:
+  - `subprocess`: External process management
+  - `struct`: Binary PCM data parsing
+  - `signal`: Graceful shutdown
+  - `configparser`: Config file parsing
+  - `pathlib`: File path operations
+- External (optional):
+  - `webrtcvad`: ML-based speech detection (highly recommended)
 
 ## Production Deployment Context
 
@@ -511,6 +623,13 @@ The production deployment runs in an office environment with the following chara
    - ~50% space savings vs WAV
    - Fast decompression for playback/transcription
    - Industry-standard format with broad compatibility
+
+7. **WebRTC VAD (Aggressiveness = 1)**
+   - Filters non-speech sounds (door slams, keyboard, HVAC)
+   - Aggressiveness 1 chosen over 2/3 for inclusivity
+   - Captures varied speech patterns and accents
+   - Combined with 2.0% noise floor for efficiency
+   - Reduces false triggers from office equipment
 
 ## Troubleshooting Guide
 
@@ -569,6 +688,31 @@ Problem: Never stops    → DECREASE threshold
 - Validate config: `python3 raspi_audio_recorder.py --config config.ini --validate`
 - Check storage path permissions: `ls -ld /hddzfs/raspi-audio`
 - Verify SoX installed: `sox --version`
+- Install webrtcvad if needed: `pip install webrtcvad`
+
+**VAD Not Working** (falls back to RMS):
+- Check if webrtcvad installed: `pip show webrtcvad`
+- Verify sample rate is valid (8000/16000/32000/48000 Hz)
+- Check logs for VAD initialization messages
+- If unsupported sample rate, service will auto-fall back to RMS-only
+- VAD requires mono audio (channels = 1)
+
+**Too Many False Triggers** (recording non-speech):
+- **Increase** VAD aggressiveness (1 → 2 → 3)
+  - Higher = more aggressive filtering
+- **Increase** noise floor threshold (2% → 3% → 4%)
+  - Filters more low-level sounds
+- Check DEBUG logs to see what's triggering recordings
+- Consider adjusting minimum duration to filter brief sounds
+
+**Missing Speech** (not recording conversations):
+- **Decrease** VAD aggressiveness (2 → 1 → 0)
+  - Lower = more inclusive
+- **Decrease** noise floor threshold (2% → 1%)
+  - Allows quieter sounds through
+- Check microphone sensitivity/gain: `alsamixer`
+- Verify microphone placement (closer to speakers)
+- Test with `use_vad = false` to verify audio levels
 
 ## Future Enhancement Areas
 
