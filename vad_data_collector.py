@@ -1,4 +1,14 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+
+# -*- coding: utf-8 -*-
+
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "webrtcvad>=2.0.10",
+# ]
+# ///
+
 """
 VAD Data Collector - Real-time audio metrics and metadata logging
 
