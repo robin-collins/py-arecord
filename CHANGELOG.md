@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **VAD Data Collection and Analysis System**: Comprehensive companion toolset for optimizing Voice Activity Detection configuration
+  - **vad_data_collector.py**: Standalone data collection daemon with real-time audio metrics logging and hotkey-based metadata tagging
+  - **vad_analyzer.py**: CLI tool for querying, visualization, statistical analysis, and configuration recommendations
+  - **vad_database.py**: SQLite3 database schema and operations for performant time-series data storage
+  - **vad_metadata.py**: State machine for managing timed (30s) and persistent metadata tags with conflict resolution
+  - **vad_hotkeys.py**: Terminal-based non-blocking keyboard input handler for metadata tagging during live collection
+  - **vad_recommender.py**: Statistical analysis engine generating optimal configuration recommendations based on collected data
+  - **vad_collector_config.ini**: Configuration file for data collector with audio device, VAD parameters, database path, and retention policy
+  - **requirements_collector.txt**: Python dependencies for collector and analyzer (webrtcvad, matplotlib, pandas)
+  - **README_VAD_TUNING.md**: Comprehensive usage guide with workflow, hotkey reference, troubleshooting, and best practices
+  - Hotkey system with 10 metadata tags: timed (30s) and persistent toggles for speech scenarios, music, video, and ambient noise
+  - Database features: WAL mode, batch inserts, indexed queries, configurable retention with automatic cleanup
+  - Analyzer commands: query/export to CSV, statistics summary, matplotlib visualizations, configuration recommendations, data cleanup
+  - Recommendation engine analyzes RMS distributions, false positive rates, and natural pause patterns to suggest optimal thresholds
+  - Optional raw audio chunk storage in database for segment playback and manual verification
 - **ARCHITECTURE.md**: Comprehensive technical documentation describing audio capture pipeline, WebRTC VAD integration, silence detection system, file management, and production deployment configuration
 - **CODE_ANALYSIS.md**: Detailed code review identifying logic flaws, exception handling gaps, security considerations, and performance analysis with prioritized recommendations (updated to reflect recent fixes)
 - **ISSUES.md**: Actionable issue tracker with prioritized list of bugs, improvements, and edge cases to address (6 issues total: 1 critical, 1 major, 4 minor)

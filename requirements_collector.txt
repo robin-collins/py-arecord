@@ -1,0 +1,13 @@
+# VAD Data Collector and Analyzer Dependencies
+
+# Core dependencies (required)
+webrtcvad>=2.0.10
+
+# Analysis and visualization (optional, required for analyzer visualize command)
+matplotlib>=3.3.0
+pandas>=1.1.0
+
+# Note: The following system dependencies are also required but must be installed via apt/yum:
+# - alsa-utils (provides arecord)
+# - python3-dev
+# - portaudio19-dev (if using pyaudio in future)
