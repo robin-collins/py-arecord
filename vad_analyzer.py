@@ -1,4 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+
+# -*- coding: utf-8 -*-
+
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "webrtcvad>=2.0.10",
+#     "matplotlib>=3.3.0",
+#     "pandas>=1.1.0",
+# ]
+# ///
+
 """
 VAD Data Analyzer - CLI tool for querying and analyzing collected VAD data
 
